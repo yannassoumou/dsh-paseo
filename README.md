@@ -74,5 +74,23 @@ disable them per provider in `~/.paseo/config.json` if turns fail with 400 paylo
 
 ## Notes
 
-- ACP session persistence: DSH sessions restore natively when Paseo reopens them.
+### What the bridge does
+
+DSH's ACP server (`dsh --profile acp`) persists sessions and supports `session/resume`, but Paseo
+reopens provider sessions with ACP's `session/load`, which also replays the transcript. DSH does
+not implement that variant, so the plugin bridges the gap:
+
+- **persistence**: the bridge advertises `agentCapabilities.loadSession` and translates Paseo's
+  `session/load` into `session/resume`, so sessions survive daemon restarts, idle timeouts, and
+  `paseo agent reload`;
+- **history replay**: Paseo clears its timeline on reopen and expects the provider to replay
+  history, so the bridge records each session's transcript under
+  `~/.local/state/dsh-paseo/transcripts/` and injects it back as timeline items when the session
+  reopens;
+- **stream correctness**: DSH tags reasoning and text blocks of one message with the same
+  `messageId`; the bridge splits them so reasoning and answer render as separate items.
+
+- ACP session persistence: DSH sessions restore natively when Paseo reopens them, including DSH-side
+  agent context (verified: words remembered before a reload or ACP process kill are recalled after).
 - The plugin has no client-side code; Paseo's standard ACP timeline renderer covers everything.
+
