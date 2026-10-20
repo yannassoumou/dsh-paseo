@@ -1,0 +1,8 @@
+{
+  "id": "dsh",
+  "name": "DeepSeek Harness",
+  "description": "DeepSeek Harness (dsh) as a Paseo provider over the Agent Client Protocol",
+  "requirements": {
+    "paseo": ">=0.10.0"
+  }
+}
