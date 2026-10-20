@@ -94,3 +94,32 @@ not implement that variant, so the plugin bridges the gap:
   agent context (verified: words remembered before a reload or ACP process kill are recalled after).
 - The plugin has no client-side code; Paseo's standard ACP timeline renderer covers everything.
 
+
+## Companion: show Paseo sessions in the DSH workspace browser
+
+Paseo agents own durable DSH Sessions, but nothing creates a DSH Workspace for their cwd, so they
+sit in the Ungrouped bucket. [`companion/paseo-session-workspaces.ts`](companion/paseo-session-workspaces.ts)
+is a DSH plugin (not part of the Paseo plugin) that watches the Paseo daemon's agent records and
+attaches each Paseo session to the DSH Workspace for its cwd, titled from the Paseo project
+(`project · branch` for worktrees). Every session then appears under its workspace in the DSH
+browser with full trajectory, search, and history.
+
+Install it into the DSH **web** profile (a profile-local plugin file — no build step):
+
+```bash
+mkdir -p ~/.dsh/profiles/web/plugins
+cp companion/paseo-session-workspaces.ts ~/.dsh/profiles/web/plugins/
+```
+
+then append to `~/.dsh/profiles/web/cordis.patch.yml`:
+
+```yaml
+- insert:
+  - id: paseo-session-workspaces
+    name: ./plugins/paseo-session-workspaces.ts
+```
+
+Relative plugin names resolve against the profile directory. `HMR` reloads the profile on patch
+edits; if a running host logs `HMR is disposed`, restart the DSH web host. Options: `paseoHome`
+(default `~/.paseo`), `enabledProviders` (default `["dsh"]`), `scanIntervalMs` (default 5000) under
+a `config:` block on that entry.
