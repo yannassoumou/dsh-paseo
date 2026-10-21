@@ -125,7 +125,9 @@ class TranscriptRecorder {
     let items = this.items.get(nativeSessionId);
     if (!items) {
       items = this.loadFromDisk(nativeSessionId);
-      this.items.set(nativeSessionId, items);
+      // Never cache a miss: a transcript can be created after this point (for example a
+      // backfilled or reopened session), and a stale empty cache would hide it forever.
+      if (items.length > 0) this.items.set(nativeSessionId, items);
     }
     return items.map((item) => ({ ...item }));
   }
