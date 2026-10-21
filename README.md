@@ -123,3 +123,21 @@ Relative plugin names resolve against the profile directory. `HMR` reloads the p
 edits; if a running host logs `HMR is disposed`, restart the DSH web host. Options: `paseoHome`
 (default `~/.paseo`), `enabledProviders` (default `["dsh"]`), `scanIntervalMs` (default 5000) under
 a `config:` block on that entry.
+
+## Maintenance tools
+
+`tools/recover_workspaces.py` drives the Paseo daemon's own workspace-recovery RPC
+(`workspace.recovery.inspect/restore`) over its local WebSocket, and
+`tools/backfill_transcripts.py` rebuilds bridge transcripts from durable DSH session logs
+(`~/.dsh/sessions/.../session.v4.jsonl.zstd`).
+
+A common cause of "history lost / Reessayer" in Paseo: the agent's workspace was archived
+(Paseo deletes the worktree directory) while the agent itself stayed live. Every timeline refresh
+then fails with `Working directory does not exist`, and the timeline shows empty. Repair order:
+
+1. make sure the workspace branch still exists in the repo (`git branch <branch>`; restore it from
+   a dangling commit via `git fsck --lost-found` if needed),
+2. run the recovery RPC (or open the archived workspace route in Paseo, which offers Restore),
+3. run the transcript backfill if the transcript file is missing, then `paseo agent reload <id>`.
+
+DSH never loses the underlying session: the full trajectory stays in `~/.dsh/sessions/`.
