@@ -150,3 +150,10 @@ though the session is healthy. If an older build stored such a row, restarting t
 (the timeline store is in memory; transcripts replay schema-valid).
 
 DSH never loses the underlying session: the full trajectory stays in `~/.dsh/sessions/`.
+
+## Single-writer sessions
+
+DSH sessions are single-writer (a `session.lock` flock lease). If a session is **open in the DSH
+web UI**, Paseo cannot reopen it: resume fails with "already owned by an active write handle". The
+bridge translates this into an explicit message ("This DSH session is open elsewhere…"). Close the
+session tab in the DSH web UI, then press Réessayer in Paseo.

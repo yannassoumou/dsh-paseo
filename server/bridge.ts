@@ -445,6 +445,19 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
               params: { sessionId: nativeSessionId, items: items.slice(offset, offset + REPLAY_BATCH_SIZE) },
             } as unknown as AcpStreamMessage);
           }
+        } else if (record.error !== undefined) {
+          // DSH sessions are single-writer: an open DSH web UI tab (or another Paseo agent)
+          // holds the session lease and resume fails with a bare "Internal error". Annotate it
+          // so Paseo's history error is actionable.
+          const details = JSON.stringify(record.error);
+          if (details.includes("already owned by an active write handle")) {
+            const error = (message as { error?: { code?: number; message?: string; data?: unknown } }).error;
+            if (error && typeof error === "object") {
+              error.message =
+                "This DSH session is open elsewhere (usually a tab in the DSH web UI) — close it "
+                + "in the DSH web UI and press Réessayer.";
+            }
+          }
         }
       }
       message = rewriteUpdateIds(rewriteInbound(sanitizeFailedToolUpdate(message)));
