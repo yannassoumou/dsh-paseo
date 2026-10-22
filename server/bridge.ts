@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnProcess, terminateProcess } from "@getpaseo/plugin/server";
@@ -32,6 +33,15 @@ interface ResolvedLaunch {
   env: Readonly<Record<string, string>>;
 }
 
+/** Copy the parent environment, dropping entries whose value is undefined. */
+function parentEnv(): Readonly<Record<string, string>> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 /** One chronological transcript entry; replay maps these onto Paseo timeline items. */
 interface RecordedItem {
   id: string;
@@ -57,6 +67,7 @@ class TranscriptRecorder {
   private readonly byKey = new Map<string, RecordedItem>();
   private nextId = new Map<string, number>();
   private readonly flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingWrites = new Map<string, Promise<void>>();
 
   recordUserPrompt(nativeSessionId: string, prompt: unknown): void {
     const blocks = Array.isArray(prompt) ? prompt : [];
@@ -158,8 +169,24 @@ class TranscriptRecorder {
       }
     }
     items.push(item);
-    if (items.length > MAX_RECORDED_ITEMS) items.shift();
+    if (items.length > MAX_RECORDED_ITEMS) {
+      const dropped = items.shift();
+      if (dropped) this.dropLookup(dropped);
+    }
     this.scheduleFlush(nativeSessionId);
+  }
+
+  /**
+   * Forget the live-stream lookup for an item truncated out of the transcript, so further
+   * chunks never append to an object the flush no longer serializes.
+   */
+  private dropLookup(dropped: RecordedItem): void {
+    for (const [key, tracked] of this.byKey) {
+      if (tracked === dropped) {
+        this.byKey.delete(key);
+        return;
+      }
+    }
   }
 
   private loadFromDisk(nativeSessionId: string): RecordedItem[] {
@@ -175,17 +202,29 @@ class TranscriptRecorder {
     if (this.flushTimers.has(nativeSessionId)) return;
     const timer = setTimeout(() => {
       this.flushTimers.delete(nativeSessionId);
-      const items = this.items.get(nativeSessionId);
-      if (!items) return;
-      try {
-        mkdirSync(TRANSCRIPT_DIR, { recursive: true });
-        writeFileSync(this.pathFor(nativeSessionId), JSON.stringify(items));
-      } catch {
-        /* replay is best effort; disk failures must not break a live session */
-      }
+      // Chain writes per session so a slow flush never interleaves with the next one, and keep
+      // the disk write off the event loop: the array can reach the recording caps.
+      this.pendingWrites.set(
+        nativeSessionId,
+        (this.pendingWrites.get(nativeSessionId) ?? Promise.resolve()).then(() =>
+          this.writeTranscript(nativeSessionId),
+        ),
+      );
     }, 500);
     timer.unref?.();
     this.flushTimers.set(nativeSessionId, timer);
+  }
+
+  private async writeTranscript(nativeSessionId: string): Promise<void> {
+    const items = this.items.get(nativeSessionId);
+    if (!items) return;
+    const payload = JSON.stringify(items);
+    try {
+      await mkdir(TRANSCRIPT_DIR, { recursive: true });
+      await writeFile(this.pathFor(nativeSessionId), payload);
+    } catch {
+      /* replay is best effort; disk failures must not break a live session */
+    }
   }
 
   private pathFor(nativeSessionId: string): string {
@@ -366,7 +405,7 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
   }) as ChildProcessWithoutNullStreams;
   child.stderr.resume();
 
-  const pendingLoadResponses = new Map<number, string>();
+  const pendingLoadResponses = new Map<string, string>();
 
   let controller: ReadableStreamDefaultController<AcpStreamMessage> | undefined;
   let closed = false;
@@ -414,7 +453,7 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
         continue;
       }
       const record = message as {
-        id?: number;
+        id?: number | string | null;
         method?: string;
         params?: { sessionId?: unknown; update?: unknown };
         result?: unknown;
@@ -430,9 +469,15 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
           recorder.recordUpdate(notification.sessionId, cleanedParams?.update ?? notification.update);
         }
       }
-      if (record.id !== undefined && pendingLoadResponses.has(record.id)) {
-        const nativeSessionId = pendingLoadResponses.get(record.id)!;
-        pendingLoadResponses.delete(record.id);
+      // Only a response (no `method`) can complete a pending load; a DSH-originated request
+      // (session/request_permission) may reuse the same JSON-RPC id and must not consume it.
+      const pendingKey =
+        record.method === undefined && (typeof record.id === "number" || typeof record.id === "string")
+          ? String(record.id)
+          : undefined;
+      if (pendingKey !== undefined && pendingLoadResponses.has(pendingKey)) {
+        const nativeSessionId = pendingLoadResponses.get(pendingKey)!;
+        pendingLoadResponses.delete(pendingKey);
         if (record.error === undefined && record.result !== undefined) {
           const items = recorder.snapshot(nativeSessionId);
           // Replay before the load response so the shim's open() path processes the items.
@@ -443,7 +488,7 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
               jsonrpc: "2.0",
               method: REPLAY_METHOD,
               params: { sessionId: nativeSessionId, items: items.slice(offset, offset + REPLAY_BATCH_SIZE) },
-            } as unknown as AcpStreamMessage);
+            });
           }
         } else if (record.error !== undefined) {
           // DSH sessions are single-writer: an open DSH web UI tab (or another Paseo agent)
@@ -501,9 +546,13 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
         method?: string;
         params?: { sessionId?: unknown; prompt?: unknown };
       };
-      if (record.method === "session/load" && typeof record.id === "number" && record.params) {
+      if (
+        record.method === "session/load" &&
+        record.params &&
+        (typeof record.id === "number" || typeof record.id === "string")
+      ) {
         if (typeof record.params.sessionId === "string") {
-          pendingLoadResponses.set(record.id, record.params.sessionId);
+          pendingLoadResponses.set(String(record.id), record.params.sessionId);
         }
       }
       if (record.method === "session/prompt" && record.params) {
@@ -536,7 +585,7 @@ export function createDshProvider(): ProviderRegistration {
       const launch: ResolvedLaunch = request.launch ?? {
         command: DEFAULT_COMMAND[0],
         args: DEFAULT_COMMAND.slice(1),
-        env: process.env as Readonly<Record<string, string>>,
+        env: parentEnv(),
       };
       const adapter = runAcpProvider({
         id: "dsh",
