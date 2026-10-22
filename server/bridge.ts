@@ -423,7 +423,11 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
       if (record.method === "session/update" && record.params) {
         const notification = record.params;
         if (typeof notification.sessionId === "string" && notification.update) {
-          recorder.recordUpdate(notification.sessionId, notification.update);
+          // Record the sanitized update so a stored transcript never carries a
+          // failed tool with a null output (Paseo's fetch schema rejects those).
+          const cleaned = sanitizeFailedToolUpdate(message) as typeof message;
+          const cleanedParams = (cleaned as { params?: { update?: unknown } }).params;
+          recorder.recordUpdate(notification.sessionId, cleanedParams?.update ?? notification.update);
         }
       }
       if (record.id !== undefined && pendingLoadResponses.has(record.id)) {
@@ -443,7 +447,7 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
           }
         }
       }
-      message = rewriteUpdateIds(rewriteInbound(message));
+      message = rewriteUpdateIds(rewriteInbound(sanitizeFailedToolUpdate(message)));
       push(message);
     }
   });
