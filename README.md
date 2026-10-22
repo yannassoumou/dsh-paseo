@@ -42,8 +42,8 @@ the daemon's `~/.paseo/config.json` under `agents.providers` (then apply with
 ```
 
 Absolute paths are executed directly (they do not need to be found via PATH), and the file needs
-its executable bit set. `--from-default-profile acp` boots a fresh copy of the shipped `acp`
-profile into `$DSH_HOME/profiles` if you do not have one yet.
+its executable bit set. The `acp` profile ships with `dsh` and is created in `$DSH_HOME/profiles`
+automatically on first use.
 
 ### Choose the model the ACP sessions start with
 
@@ -85,8 +85,9 @@ not implement that variant, so the plugin bridges the gap:
   `paseo agent reload`;
 - **history replay**: Paseo clears its timeline on reopen and expects the provider to replay
   history, so the bridge records each session's transcript under
-  `~/.local/state/dsh-paseo/transcripts/` (up to 2 000 items; replay strings are capped at 8 KB
-  each) and injects it back as timeline items when the session reopens;
+  `~/.local/state/dsh-paseo/transcripts/` (up to 2 000 items; recorded message text caps at 40 KB
+  per item and replay strings at 8 KB each) and injects it back as timeline items when the
+  session reopens;
 - **companion diagnostics**: `paseo-session-workspaces` writes an attach trail to
   `~/.local/state/dsh-paseo/companion.log` and no longer blacklists agents whose worktree is
   momentarily missing (archived-then-restored worktrees attach when they reappear).
@@ -134,7 +135,7 @@ a `config:` block on that entry.
 `tools/backfill_transcripts.py` rebuilds bridge transcripts from durable DSH session logs
 (`~/.dsh/sessions/.../session.v4.jsonl.zstd`).
 
-A common cause of "history lost / Reessayer" in Paseo: the agent's workspace was archived
+A common cause of "history lost / Réessayer" in Paseo: the agent's workspace was archived
 (Paseo deletes the worktree directory) while the agent itself stayed live. Every timeline refresh
 then fails with `Working directory does not exist`, and the timeline shows empty. Repair order:
 

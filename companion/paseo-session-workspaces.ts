@@ -9,7 +9,7 @@
  * every Paseo session lands under its project workspace in the DSH workspace browser — with the
  * trajectory, search, and history features available for each one.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -118,6 +118,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   const note = (message: string): void => {
     try {
       mkdirSync(join(debugLog, '..'), { recursive: true })
+      // Keep the trail bounded: one rotated generation past ~512 KiB.
+      if ((statSync(debugLog, { throwIfNoEntry: false })?.size ?? 0) > 512 * 1024) {
+        renameSync(debugLog, `${debugLog}.1`)
+      }
       appendFileSync(debugLog, `${new Date().toISOString()} ${message}\n`)
     } catch {
       /* diagnostics must never break the scan */
