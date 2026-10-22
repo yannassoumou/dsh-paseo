@@ -143,4 +143,10 @@ then fails with `Working directory does not exist`, and the timeline shows empty
 2. run the recovery RPC (or open the archived workspace route in Paseo, which offers Restore),
 3. run the transcript backfill if the transcript file is missing, then `paseo agent reload <id>`.
 
+A second cause, fixed in the bridge since `e2dbff8`: DSH reports interrupted/failed tool calls
+without an output; Paseo's shim then stores a `failed` tool row with a null error, which Paseo's
+own timeline fetch schema rejects — every history fetch fails client-side and follow-ups break even
+though the session is healthy. If an older build stored such a row, restarting the daemon clears it
+(the timeline store is in memory; transcripts replay schema-valid).
+
 DSH never loses the underlying session: the full trajectory stays in `~/.dsh/sessions/`.
