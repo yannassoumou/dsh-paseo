@@ -18,8 +18,12 @@ import type {
 
 const DEFAULT_COMMAND: readonly [string, ...string[]] = ["dsh", "--profile", "acp"];
 const TRANSCRIPT_DIR = join(homedir(), ".local", "state", "dsh-paseo", "transcripts");
-const MAX_RECORDED_ITEMS = 400;
+const MAX_RECORDED_ITEMS = 2_000;
 const MAX_RECORDED_TEXT = 40_000;
+// Replay payloads are one JSON notification; keep tool outputs bounded so a long session's
+// replay cannot balloon into a multi-megagram single message.
+const MAX_REPLAY_STRING = 8_000;
+const REPLAY_BATCH_SIZE = 50;
 const REPLAY_METHOD = "_dsh.replay";
 
 interface ResolvedLaunch {
@@ -228,7 +232,8 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 
 /** Deep-convert an unknown value into a JSON-safe value accepted by the provider protocol. */
 function jsonValue(value: unknown): JsonValue {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.length > MAX_REPLAY_STRING ? `${value.slice(0, MAX_REPLAY_STRING)}…` : value;
   if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
   if (Array.isArray(value)) return value.map((entry) => jsonValue(entry));
   if (typeof value === "object" && value !== undefined) {
@@ -306,6 +311,38 @@ function rewriteUpdateIds(message: AcpStreamMessage): AcpStreamMessage {
     update.messageId = `${update.messageId}:text`;
   }
   return message;
+}
+
+/**
+ * Paseo's ACP shim maps a failed tool update's `error` straight onto `rawOutput`
+ * (connection.ts: `error: snapshot.output`). DSH reports interrupted or failed tools without an
+ * output (e.g. a tool call cancelled mid-turn), so the shim stores `status: "failed"` with
+ * `error: null` — an item Paseo's own timeline fetch schema rejects (`NonNullUnknownSchema`),
+ * which breaks the whole history fetch with "could not refresh agent history". Giving the shim a
+ * non-null output for failed updates keeps every stored item schema-valid.
+ */
+function sanitizeFailedToolUpdate(message: AcpStreamMessage): AcpStreamMessage {
+  if ((message as { method?: string }).method !== "session/update") return message;
+  const params = (message as { params?: unknown }).params as
+    | { update?: Record<string, unknown> }
+    | undefined;
+  const update = params?.update;
+  if (!update) return message;
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+    return message;
+  }
+  if (update.status !== "failed") return message;
+  if (update.rawOutput !== null && update.rawOutput !== undefined) return message;
+  const fallback =
+    typeof update.title === "string" && update.title !== ""
+      ? update.title
+      : typeof update.name === "string" && update.name !== ""
+        ? update.name
+        : "Tool call failed";
+  return {
+    ...message,
+    params: { ...params, update: { ...update, rawOutput: fallback } },
+  } as AcpStreamMessage;
 }
 
 function stopChild(child: ChildProcessWithoutNullStreams): void {
@@ -394,12 +431,14 @@ function createBridgeStream(launch: ResolvedLaunch): AcpStream {
         pendingLoadResponses.delete(record.id);
         if (record.error === undefined && record.result !== undefined) {
           const items = recorder.snapshot(nativeSessionId);
-          if (items.length > 0) {
-            // Replay before the load response so the shim's open() path processes the items.
+          // Replay before the load response so the shim's open() path processes the items.
+          // Sent in batches: one notification per session's whole history would serialize a
+          // single multi-megagram JSON message on a busy session and stall the connection.
+          for (let offset = 0; offset < items.length; offset += REPLAY_BATCH_SIZE) {
             push({
               jsonrpc: "2.0",
               method: REPLAY_METHOD,
-              params: { sessionId: nativeSessionId, items },
+              params: { sessionId: nativeSessionId, items: items.slice(offset, offset + REPLAY_BATCH_SIZE) },
             } as unknown as AcpStreamMessage);
           }
         }

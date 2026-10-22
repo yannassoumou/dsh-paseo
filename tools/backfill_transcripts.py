@@ -18,7 +18,7 @@ PASEO = os.path.expanduser("~/.paseo")
 DSH_SESSIONS = os.path.expanduser("~/.dsh/sessions")
 TRANSCRIPT_DIR = os.path.expanduser("~/.local/state/dsh-paseo/transcripts")
 ZSTD = "zstd"
-MAX_ITEMS = 400
+MAX_ITEMS = 2_000
 MAX_TEXT = 40_000
 
 

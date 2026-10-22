@@ -85,8 +85,11 @@ not implement that variant, so the plugin bridges the gap:
   `paseo agent reload`;
 - **history replay**: Paseo clears its timeline on reopen and expects the provider to replay
   history, so the bridge records each session's transcript under
-  `~/.local/state/dsh-paseo/transcripts/` and injects it back as timeline items when the session
-  reopens;
+  `~/.local/state/dsh-paseo/transcripts/` (up to 2 000 items; replay strings are capped at 8 KB
+  each) and injects it back as timeline items when the session reopens;
+- **companion diagnostics**: `paseo-session-workspaces` writes an attach trail to
+  `~/.local/state/dsh-paseo/companion.log` and no longer blacklists agents whose worktree is
+  momentarily missing (archived-then-restored worktrees attach when they reappear).
 - **stream correctness**: DSH tags reasoning and text blocks of one message with the same
   `messageId`; the bridge splits them so reasoning and answer render as separate items.
 

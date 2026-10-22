@@ -9,7 +9,7 @@
  * every Paseo session lands under its project workspace in the DSH workspace browser — with the
  * trajectory, search, and history features available for each one.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -112,10 +112,21 @@ export function apply(ctx: Context, config: Config = {}): void {
     return
   }
 
+  // Debug trail: the host's stderr is not always reachable (e.g. `pnpm dsh web` in a terminal),
+  // and silent attach failures were indistinguishable from permanent success. One line per event.
+  const debugLog = join(homedir(), '.local', 'state', 'dsh-paseo', 'companion.log')
+  const note = (message: string): void => {
+    try {
+      mkdirSync(join(debugLog, '..'), { recursive: true })
+      appendFileSync(debugLog, `${new Date().toISOString()} ${message}\n`)
+    } catch {
+      /* diagnostics must never break the scan */
+    }
+  }
+
   const attached = new Set<string>()
   const warned = new Set<string>()
   let scanning = false
-
   const scan = async (): Promise<void> => {
     if (scanning) return
     scanning = true
@@ -148,11 +159,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (sessionId === undefined) continue
         let workspacePath: string
         try {
-          if (!statSync(agent.cwd).isDirectory()) continue
+          if (!statSync(agent.cwd).isDirectory()) {
+            // The worktree is currently absent: Paseo prunes worktrees after archiving and may
+            // restore them later, and it writes the agent record in the same second it creates a
+            // fresh worktree. Skip without blacklisting so later scans can attach.
+            continue
+          }
           workspacePath = agent.cwd
         } catch {
-          // Paseo pruned the worktree; no workspace can be created for it.
-          attached.add(agent.id)
           continue
         }
         try {
@@ -162,9 +176,11 @@ export function apply(ctx: Context, config: Config = {}): void {
           )
           await workspace.attachSession(sessionId)
           attached.add(agent.id)
+          note(`attached agent ${agent.id} session ${sessionId} workspace ${workspacePath}`)
         } catch (error: unknown) {
           if (!warned.has(agent.id)) {
             warned.add(agent.id)
+            note(`attach failed agent ${agent.id} session ${sessionId} workspace ${workspacePath}: ${String(error)}`)
             ctx.logger.warn(
               `paseo-session-workspaces: cannot attach Paseo agent ${agent.id} (${sessionId}): ${String(error)}`,
             )
